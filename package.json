@@ -1,0 +1,23 @@
+﻿{
+  "name": "com.xbluec.dingconfig",
+  "version": "0.1.0",
+  "displayName": "DingConfig",
+  "description": "基于钉钉云文档的游戏配表协作工具。策划在浏览器实时编辑在线表格，程序在 Unity 里一键拉取最新数据，零冲突、零锁文件。",
+  "unity": "2021.3",
+  "unityRelease": "0f1",
+  "keywords": [
+    "dingtalk",
+    "config",
+    "spreadsheet",
+    "collaboration",
+    "editor-tool"
+  ],
+  "author": {
+    "name": "XBlueC",
+    "url": "https://github.com/XBlueC/DingConfig"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  },
+  "type": "tool"
+}
