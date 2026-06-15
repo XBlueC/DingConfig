@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.IO;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -73,7 +74,76 @@ namespace DingConfig
     /// </summary>
     public static class DwsCli
     {
-        private static string DwsPath => "dws";
+        private static string _resolvedDwsPath;
+
+        /// <summary>
+        /// 解析 dws 可执行文件的实际路径。
+        /// Unity 进程的 PATH 不一定包含 npm global bin 或 ~/.local/bin，
+        /// 因此需要主动搜索常见安装位置。
+        /// </summary>
+        private static string DwsPath
+        {
+            get
+            {
+                if (_resolvedDwsPath != null)
+                    return _resolvedDwsPath;
+
+                var ext = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+                    System.Runtime.InteropServices.OSPlatform.Windows) ? ".exe" : "";
+                var candidates = new[]
+                {
+                    "dws",  // 依赖 PATH
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "dws" + ext),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "dws" + ext),
+                    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "dws.cmd"),
+                };
+
+                foreach (var c in candidates)
+                {
+                    // "dws" 不带路径 → 交给系统 PATH 解析
+                    if (c == "dws")
+                    {
+                        try
+                        {
+                            var psi = new ProcessStartInfo
+                            {
+                                FileName = "dws" + ext,
+                                Arguments = "--version",
+                                UseShellExecute = false,
+                                RedirectStandardOutput = true,
+                                CreateNoWindow = true,
+                            };
+                            using var p = Process.Start(psi);
+                            if (p != null)
+                            {
+                                p.WaitForExit(3000);
+                                if (p.ExitCode == 0)
+                                {
+                                    _resolvedDwsPath = "dws" + ext;
+                                    return _resolvedDwsPath;
+                                }
+                            }
+                        }
+                        catch { /* PATH 里找不到，继续候选 */ }
+                    }
+                    else if (File.Exists(c))
+                    {
+                        _resolvedDwsPath = c;
+                        return _resolvedDwsPath;
+                    }
+                }
+
+                // 全部失败，回退到裸命令名（让后续调用抛出明确异常）
+                _resolvedDwsPath = "dws" + ext;
+                return _resolvedDwsPath;
+            }
+        }
+
+        /// <summary>重置路径缓存，允许重新搜索 dws 安装位置</summary>
+        public static void ResetPathCache()
+        {
+            _resolvedDwsPath = null;
+        }
 
         #region 基础执行
 

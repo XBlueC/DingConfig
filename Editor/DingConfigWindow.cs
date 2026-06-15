@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -56,7 +56,7 @@ namespace DingConfig
         private Color _cChanged, _cUpToDate, _cLocalOnly, _cOnlineOnly;
 
         private GUIStyle _sHeader, _sCell, _sCellBold, _sBadge, _sStatus;
-        private GUIStyle _sTitle, _sName, _sLink, _sLinkHover;
+        private GUIStyle _sTitle, _sName, _sLink, _sLinkHover, _sSwitch;
 
         // DrawCircle 纹理缓存，避免每帧 new Texture2D
         private readonly Dictionary<Color, Texture2D> _circleTexCache = new Dictionary<Color, Texture2D>();
@@ -109,6 +109,10 @@ namespace DingConfig
             _sCell.fontSize = 12;
             _sCell.normal.textColor = _cText;
             _sCell.padding = new RectOffset(8, 4, 4, 4);
+
+            _sSwitch = new GUIStyle(EditorStyles.label);
+            _sSwitch.fontSize = 12;
+            _sSwitch.normal.textColor = _cTextDim;
 
             _sCellBold = new GUIStyle(_sCell);
             _sCellBold.fontStyle = FontStyle.Bold;
@@ -211,6 +215,14 @@ namespace DingConfig
             Repaint();
         }
 
+        private void RedetectDws()
+        {
+            DwsCli.ResetPathCache();
+            _dwsVersion = null;
+            _dwsVersionTask = DwsCli.GetVersionAsync();
+            EditorApplication.update += OnDwsVersionUpdate;
+        }
+
         private void OnAuthCheckUpdate()
         {
             if (_checkAuthTask == null || !_checkAuthTask.IsCompleted) return;
@@ -293,18 +305,24 @@ namespace DingConfig
 
             if (_isLoggedIn)
             {
-                var dotX = headerRect.xMax - 120;
                 var centerY = headerRect.y + 14;
+                var nameContent = new GUIContent(_userName);
+                var nameWidth = _sName.CalcSize(nameContent).x;
+                nameWidth = Mathf.Min(nameWidth, 120f);
+                var linkContent = new GUIContent(_isLoggingIn ? "登录中..." : "切换");
+                var linkWidth = _sSwitch.CalcSize(linkContent).x + 8f;
+                var rightBlockW = 8f + nameWidth + 8f + linkWidth + 4f;
+                var dotX = headerRect.xMax - rightBlockW;
                 DrawCircle(new Rect(dotX, centerY, 8, 8), _cDotGreen);
-                GUI.Label(new Rect(dotX + 12, headerRect.y + 8, 60, 20), _userName, _sName);
-                var linkRect = new Rect(headerRect.xMax - 50, headerRect.y + 8, 44, 20);
+                GUI.Label(new Rect(dotX + 12, headerRect.y + 8, nameWidth, 20), _userName, _sName);
+                var linkRect = new Rect(dotX + 12 + nameWidth + 8, headerRect.y + 8, linkWidth, 20);
                 if (_isLoggingIn)
                 {
                     GUI.Label(linkRect, "登录中...", _sLink);
                 }
                 else
                 {
-                    DrawHoverLink(linkRect, "切换");
+                    DrawHoverLink(linkRect, "切换", _sSwitch);
                     if (GUI.Button(linkRect, "", GUIStyle.none)) StartLogin();
                 }
             }
@@ -328,18 +346,21 @@ namespace DingConfig
         }
 
         /// <summary>绘制带 hover 高亮背景的链接按钮</summary>
-        private void DrawHoverLink(Rect rect, string text)
+        private void DrawHoverLink(Rect rect, string text, GUIStyle baseStyle = null)
         {
+            var sBase = baseStyle ?? _sLink;
             var hovering = rect.Contains(Event.current.mousePosition);
             if (hovering)
             {
                 EditorGUI.DrawRect(rect, new Color(1f, 1f, 1f, 0.08f));
-                GUI.Label(rect, text, _sLinkHover);
+                var sHover = new GUIStyle(sBase);
+                sHover.normal.textColor = _cTextBright;
+                GUI.Label(rect, text, sHover);
                 Repaint();
             }
             else
             {
-                GUI.Label(rect, text, _sLink);
+                GUI.Label(rect, text, sBase);
             }
         }
 
@@ -360,7 +381,6 @@ namespace DingConfig
             GUILayout.Space(8);
 
             // ===== dws CLI 状态 =====
-            EditorGUILayout.BeginHorizontal();
             if (_dwsVersion == null)
             {
                 EditorGUILayout.HelpBox("正在检测 dws CLI ...", MessageType.Info);
@@ -368,15 +388,22 @@ namespace DingConfig
             else if (string.IsNullOrEmpty(_dwsVersion))
             {
                 EditorGUILayout.HelpBox(
-                    "未检测到 dws CLI，请先安装钉钉命令行工具。\n" +
-                    "安装后重启 Unity 即可使用本工具。",
+                    "未检测到 dws CLI，请先安装钉钉命令行工具。",
                     MessageType.Warning);
+                GUILayout.Space(2);
+                EditorGUILayout.BeginHorizontal();
+                GUILayout.FlexibleSpace();
+                if (GUILayout.Button("重新检测", GUILayout.Width(80)))
+                {
+                    RedetectDws();
+                }
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndHorizontal();
             }
             else
             {
                 EditorGUILayout.HelpBox($"dws CLI 已安装  ({_dwsVersion})", MessageType.None);
             }
-            EditorGUILayout.EndHorizontal();
 
             // 文档链接
             EditorGUILayout.BeginHorizontal();
