@@ -89,10 +89,12 @@ namespace DingConfig
                     return _resolvedDwsPath;
 
                 var ext = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
-                    System.Runtime.InteropServices.OSPlatform.Windows) ? ".exe" : "";
+                    System.Runtime.InteropServices.OSPlatform.Windows)
+                    ? ".exe"
+                    : "";
                 var candidates = new[]
                 {
-                    "dws",  // 依赖 PATH
+                    "dws", // 依赖 PATH
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "bin", "dws" + ext),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "dws" + ext),
                     Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "npm", "dws.cmd"),
@@ -124,7 +126,10 @@ namespace DingConfig
                                 }
                             }
                         }
-                        catch { /* PATH 里找不到，继续候选 */ }
+                        catch
+                        {
+                            /* PATH 里找不到，继续候选 */
+                        }
                     }
                     else if (File.Exists(c))
                     {
@@ -182,7 +187,15 @@ namespace DingConfig
 
             if (completed == timeoutTask)
             {
-                try { process.Kill(); } catch { /* 进程可能已退出 */ }
+                try
+                {
+                    process.Kill();
+                }
+                catch
+                {
+                    /* 进程可能已退出 */
+                }
+
                 throw new Exception($"dws 进程超时 ({ProcessTimeoutSeconds}s)，已强制终止");
             }
 
@@ -329,6 +342,61 @@ namespace DingConfig
         }
 
         /// <summary>
+        /// 获取在线表格的所有工作表列表
+        /// </summary>
+        public static async Task<List<SheetInfo>> SheetListAsync(
+            string nodeId, Action<string> log = null)
+        {
+            var result = await RunAsync($"sheet list --node \"{nodeId}\" -f json", log);
+            try
+            {
+                var token = Newtonsoft.Json.Linq.JToken.Parse(result.Stdout);
+                Newtonsoft.Json.Linq.JArray items;
+
+                // Handle both direct array and object with items/sheets field
+                if (token is Newtonsoft.Json.Linq.JArray arr)
+                {
+                    items = arr;
+                }
+                else if (token is Newtonsoft.Json.Linq.JObject obj)
+                {
+                    // Check for error first
+                    if (obj["error"] != null)
+                    {
+                        var errMsg = obj["error"]?["message"]?.ToString() ?? result.Stdout;
+                        throw new Exception("API错误: " + errMsg);
+                    }
+
+                    // Try common wrapper fields
+                    items = obj["items"] as Newtonsoft.Json.Linq.JArray
+                            ?? obj["sheets"] as Newtonsoft.Json.Linq.JArray
+                            ?? obj["data"] as Newtonsoft.Json.Linq.JArray
+                            ?? new Newtonsoft.Json.Linq.JArray();
+                }
+                else
+                {
+                    throw new Exception("未知的响应格式: " + result.Stdout);
+                }
+
+                var sheets = new List<SheetInfo>();
+                foreach (var item in items)
+                {
+                    sheets.Add(new SheetInfo
+                    {
+                        Id = item["id"]?.ToString() ?? item["sheetId"]?.ToString() ?? "",
+                        Name = item["name"]?.ToString() ?? item["title"]?.ToString() ?? ""
+                    });
+                }
+
+                return sheets;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("解析工作表列表失败: " + ex.Message + "\n" + result.Stdout);
+            }
+        }
+
+        /// <summary>
         /// 导出在线电子表格 (axls) 为 xlsx（通过 sheet export CLI）
         /// </summary>
         public static async Task ExportSheetAsync(
@@ -340,33 +408,68 @@ namespace DingConfig
         }
 
         /// <summary>
-        /// 通过 sheet range read 读取数据并本地生成 xlsx（绕过 sheet export CLI bug）
-        /// </summary>
-        public static async Task ExportSheetViaRangeReadAsync(
-            string nodeId, string outputPath, Action<string> log = null)
-        {
-            log?.Invoke($"[range read] 读取在线表格数据...");
-            var result = await RunAsync(
-                $"sheet range read --node \"{nodeId}\" -f json", log);
-
-            var rows = XlsxWriter.ParseDisplayValues(result.Stdout);
-            if (rows.Count == 0)
-                throw new Exception("表格数据为空，请确认在线表格有内容");
-
-            XlsxWriter.Write(outputPath, rows);
-            log?.Invoke($"[range read] 已写入 {rows.Count} 行 → {outputPath}");
-        }
-
-        /// <summary>
         /// 获取文档元信息 (contentType / extension)
         /// </summary>
-        public static async Task<string> GetDocInfoAsync(
+        public static async Task<DocNodeInfo> GetDocInfoAsync(
             string nodeId, Action<string> log = null)
         {
             var result = await RunAsync($"doc info --node \"{nodeId}\" -f json", log);
-            return result.Stdout;
+            try
+            {
+                return Newtonsoft.Json.JsonConvert.DeserializeObject<DocNodeInfo>(result.Stdout);
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("解析文档信息失败: " + ex.Message + "\n" + result.Stdout);
+            }
+        }
+
+        /// <summary>
+        /// 使用 dws doc upload --convert 直接上传 xlsx 文件并转换为钉钉在线表格。
+        /// 返回新创建的 nodeId。
+        /// </summary>
+        public static async Task<string> DocUploadAsync(
+            string localXlsxPath,
+            SpaceType spaceType, string spaceId,
+            Action<string> log = null)
+        {
+            var fileName = Path.GetFileName(localXlsxPath);
+            log?.Invoke($"[upload] doc upload: {fileName}");
+
+            string args;
+            if (spaceType == SpaceType.Workspace)
+                args = $"doc upload --file \"{localXlsxPath}\" --workspace \"{spaceId}\" --convert -f json";
+            else
+                args = $"doc upload --file \"{localXlsxPath}\" --folder \"{spaceId}\" --convert -f json";
+
+            var result = await RunAsync(args, log);
+
+            try
+            {
+                var json = Newtonsoft.Json.Linq.JObject.Parse(result.Stdout);
+                var nodeId = json["nodeId"]?.ToString()
+                             ?? json["id"]?.ToString()
+                             ?? json["data"]?["nodeId"]?.ToString()
+                             ?? json["data"]?["id"]?.ToString();
+                if (string.IsNullOrEmpty(nodeId))
+                    throw new Exception("上传成功但未返回 nodeId: " + result.Stdout);
+                return nodeId;
+            }
+            catch (Exception ex) when (!(ex is Exception && ex.Message.StartsWith("上传成功")))
+            {
+                throw new Exception("解析上传结果失败: " + ex.Message + "\n" + result.Stdout);
+            }
         }
 
         #endregion
+
+        /// <summary>
+        /// 工作表信息
+        /// </summary>
+        public class SheetInfo
+        {
+            public string Id { get; set; }
+            public string Name { get; set; }
+        }
     }
 }
